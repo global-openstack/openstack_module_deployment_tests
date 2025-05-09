@@ -76,10 +76,12 @@ jobs:
           fi
         done
 
-    - name: Set SSH Key Permissions
+    - name: Prepare SSH Private Key
       run: |
-        chmod 600 $OS_PRIVATE_KEY
-        ls -la $OS_PRIVATE_KEY
+        echo "🗝️ Writing SSH Private Key to file..."
+        echo "$OS_PRIVATE_KEY" > private_key.pem
+        chmod 600 private_key.pem
+        ls -la private_key.pem
 
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
@@ -132,7 +134,7 @@ jobs:
           echo "Attempting to SSH into $vm_name at $ip_address..."
           
           for i in {1..5}; do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $OS_PRIVATE_KEY ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i private_key.pem ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
             echo "SSH attempt $i failed...retrying in 5 seconds."
             sleep 5
           done
