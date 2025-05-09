@@ -89,9 +89,9 @@ jobs:
       run: |
         echo "🔍 Fetching Terraform Outputs..."
         
-        # Get the floating IPs directly from Terraform, sanitize and clean up
+        # Get the floating IPs directly from Terraform, filter only JSON
         echo "Fetching floating IPs..."
-        terraform output -json floating_ips | tr -d '\r' | sed 's/[^[:print:]\t]//g' > floating_ips.json
+        terraform output -json floating_ips 2> /dev/null | jq . > floating_ips.json
 
         echo "🔍 Raw Terraform Output (sanitized):"
         cat floating_ips.json
@@ -109,7 +109,7 @@ jobs:
             if [ "$attempt" -lt "$max_retries" ]; then
               echo "🔄 Retrying in 5 seconds..."
               sleep 5
-              terraform output -json floating_ips | tr -d '\r' | sed 's/[^[:print:]\t]//g' > floating_ips.json
+              terraform output -json floating_ips 2> /dev/null | jq . > floating_ips.json
             else
               echo "🔥 Maximum retries reached. Failing."
               cat floating_ips.json
