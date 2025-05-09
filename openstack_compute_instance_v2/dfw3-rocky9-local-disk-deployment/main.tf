@@ -1,7 +1,7 @@
 module "openstack_vm" {
 
   source              = "github.com/global-openstack/openstack_compute_instance_v2.git?ref=v1.2.0"
-  vm_count            = 5
+  vm_count            = 4
   use_name_formatting = true
   instance_base_name  = "rocky9-local-test"
 
