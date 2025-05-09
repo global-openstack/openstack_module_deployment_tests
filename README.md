@@ -23,7 +23,7 @@ This repository supports the following scenarios:
 
 ## 🏗️ Repository Structure
 
-```
+```markdown
 .
 ├── .github/
 │ └── workflows/
