@@ -124,10 +124,10 @@ jobs:
         chmod 600 "$PRIVATE_KEY_PATH"
         echo "✅ Private key is accessible at $PRIVATE_KEY_PATH."
 
-    - name: SSH Connectivity Test
+    - name: SSH Connectivity Test (Parallelized)
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
-        echo "🔌 Starting SSH Connectivity Test..."
+        echo "🔌 Starting SSH Connectivity Test (Parallelized)..."
         echo "📄 Reading floating IPs from floating_ips.txt"
         
         # Log file for debugging
@@ -136,9 +136,6 @@ jobs:
         
         # Ensure correct line endings
         sed -i 's/\r$//' floating_ips.txt
-
-        # Use a file descriptor for the loop
-        exec 3<floating_ips.txt
 
         # Initialize counters
         total_vms=0
@@ -149,19 +146,10 @@ jobs:
         successful_list=()
         failed_list=()
 
-        while IFS= read -r line <&3; do
-          total_vms=$((total_vms + 1))
-          echo "🔄 Processing line: '$line'"
-
-          # Split into name and IP
-          vm_name=$(echo $line | awk -F':' '{print $1}')
-          ip_address=$(echo $line | awk -F':' '{print $2}')
-
-          # If empty, skip it
-          if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
-            echo "⚠️ Skipping empty or malformed line: $line"
-            continue
-          fi
+        # Function to run SSH checks in parallel
+        ssh_check() {
+          local vm_name=$1
+          local ip_address=$2
           
           echo "🌐 Checking SSH port availability for $vm_name ($ip_address)..."
           
@@ -178,40 +166,54 @@ jobs:
           
           if [ "$i" -eq 5 ]; then
             echo "⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
-            echo "🔄 Moving to the next VM..."
             failed_list+=("$vm_name ($ip_address)")
-            failed_vms=$((failed_vms + 1))
-            continue
+            ((failed_vms++))
+            return
           fi
 
           echo "🔌 Connecting to $vm_name ($ip_address)..."
-          connection_success=0
           
+          # Retry loop for SSH connectivity with a timeout
           for i in {1..5}; do
             if timeout 15 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
               echo "✅ Connection to $vm_name successful!"
-              connection_success=1
               successful_list+=("$vm_name ($ip_address)")
-              successful_vms=$((successful_vms + 1))
-              break
+              ((successful_vms++))
+              return
             else
               echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
               sleep 5
             fi
           done
 
-          if [ $connection_success -eq 0 ]; then
-            echo "❌ Connection to $vm_name failed after 5 attempts."
-            failed_list+=("$vm_name ($ip_address)")
-            failed_vms=$((failed_vms + 1))
+          echo "❌ Connection to $vm_name failed after 5 attempts."
+          failed_list+=("$vm_name ($ip_address)")
+          ((failed_vms++))
+        }
+
+        # Read each line and execute the SSH check in the background
+        while IFS= read -r line; do
+          total_vms=$((total_vms + 1))
+          echo "🔄 Processing line: '$line'"
+
+          # Split into name and IP
+          vm_name=$(echo $line | awk -F':' '{print $1}')
+          ip_address=$(echo $line | awk -F':' '{print $2}')
+
+          # If empty, skip it
+          if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
+            echo "⚠️ Skipping empty or malformed line: $line"
+            continue
           fi
-
-          echo "🔄 Moving to the next VM..."
-        done
+          
+          # Run the check in parallel
+          ssh_check "$vm_name" "$ip_address" &
         
-        # Close the file descriptor
-        exec 3<&-
-
+        done < floating_ips.txt
+        
+        # Wait for all background jobs to complete
+        wait
+        
         # Summary Report
         echo "📋 SSH Connectivity Test Summary:"
         echo "Total VMs Processed: $total_vms"
