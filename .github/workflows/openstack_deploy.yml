@@ -137,8 +137,10 @@ jobs:
         # Ensure correct line endings
         sed -i 's/\r$//' floating_ips.txt
 
-        # Read each line in floating_ips.txt and debug
-        while IFS= read -r line || [ -n "$line" ]; do
+        # Use a file descriptor for the loop
+        exec 3<floating_ips.txt
+        
+        while IFS= read -r line <&3; do
           echo "🔄 Processing line: '$line'"
 
           # Split into name and IP
@@ -194,7 +196,10 @@ jobs:
           fi
 
           echo "🔄 Moving to the next VM..."
-        done < floating_ips.txt
+        done
+        
+        # Close the file descriptor
+        exec 3<&-
 
     - name: Terraform Destroy (Cleanup)
       if: always()
