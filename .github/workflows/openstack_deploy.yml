@@ -59,25 +59,33 @@ jobs:
         terraform state pull > terraform_state.json
         
         echo "🔍 Parsing VM Instances..."
+        
+        # Enhanced parsing to handle networks and IPs
         jq -r '
           .resources[] | 
           select(.type == "openstack_compute_instance_v2") | 
           .instances[] | 
           {
             name: .attributes.name,
-            floating_ip: .attributes.network.0.floating_ip
+            networks: .attributes.network
           }
         ' terraform_state.json > vm_list.json
         
-        echo "🔍 Discovered VMs and Floating IPs:"
+        echo "🔍 Discovered VMs and Network Configurations:"
         cat vm_list.json
         
         # Initialize the IP list
         > floating_ips.txt
 
-        # Loop through JSON and extract IPs
-        jq -r '.floating_ip' vm_list.json | grep -v null >> floating_ips.txt
-
+        # Loop through JSON and extract Floating IPs
+        jq -c '.networks[]' vm_list.json | while read -r network; do
+          echo "🔍 Checking network block: $network"
+          floating_ip=$(echo "$network" | jq -r '.floating_ip')
+          if [ "$floating_ip" != "null" ]; then
+            echo "$floating_ip" >> floating_ips.txt
+          fi
+        done
+        
         echo "✅ Floating IPs ready for SSH testing:"
         cat floating_ips.txt
 
