@@ -56,11 +56,28 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         # ====> Step 1: Get Only JSON Lines <====
-        terraform output -json | tee raw_output.json
+        echo "🔍 Extracting JSON output from Terraform..."
         
-        # Check if the file is empty or corrupt
-        if ! [ -s raw_output.json ]; then
-          echo "❌ Terraform output is empty or corrupt."
+        MAX_RETRIES=3
+        ATTEMPT=1
+        while [ $ATTEMPT -le $MAX_RETRIES ]; do
+          terraform output -json | tee raw_output.json
+          sync  # Force buffer flush
+
+          # Check if JSON is valid
+          if jq empty raw_output.json > /dev/null 2>&1; then
+            echo "✅ Valid JSON detected."
+            break
+          else
+            echo "⚠️ JSON output was incomplete. Retrying ($ATTEMPT/$MAX_RETRIES)..."
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 5
+          fi
+        done
+
+        if [ $ATTEMPT -gt $MAX_RETRIES ]; then
+          echo "❌ Failed to get valid JSON output from Terraform after $MAX_RETRIES attempts."
+          cat raw_output.json
           exit 1
         fi
 
@@ -68,7 +85,7 @@ jobs:
         echo "🔍 Cleaning up JSON output..."
         awk '/^{/{flag=1} flag' raw_output.json | sed '/^}/!d' > tf_output.json
         
-        # Validate JSON
+        # ====> Step 2: Validate JSON <====
         echo "🔍 Validating JSON format..."
         if ! jq empty tf_output.json > /dev/null 2>&1; then
           echo "❌ Terraform output is not valid JSON. Dumping contents:"
@@ -76,15 +93,15 @@ jobs:
           exit 1
         fi
         
-        # ====> Step 2: Dump Full JSON <====
+        # ====> Step 3: Dump Full JSON <====
         echo "🔍 Full JSON output from Terraform (validated):"
         cat tf_output.json | tee tf_output.log
 
-        # ====> Step 3: List All Keys <====
+        # ====> Step 4: List All Keys <====
         echo "🔍 Top-level keys in Terraform output:"
         jq 'keys' tf_output.json | tee keys.log
         
-        # ====> Step 4: Parse Each Key Separately <====
+        # ====> Step 5: Parse Each Key Separately <====
         
         # 1. Floating IPs
         if jq -e '.floating_ips.value' tf_output.json > /dev/null; then
