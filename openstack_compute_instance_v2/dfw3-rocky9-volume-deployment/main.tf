@@ -20,8 +20,6 @@ module "openstack_vm" {
 
   network_name        = "DMZ-Network"
   subnet_name         = "dmz-subnet"
-  
-  #static_ips = ["192.168.0.20","192.168.0.21","192.168.0.22","192.168.0.23","192.168.0.24"]
 
   additional_nics = [
     {
@@ -30,8 +28,6 @@ module "openstack_vm" {
       security_groups = ["inside-sg"]
     }
   ]
-
-  #add_nics_static_ips = ["172.16.0.20","172.16.0.21","172.16.0.22","172.16.0.23",,"172.16.0.24"]
 
   additional_volumes = [
     { size = 10, type = "Performance" },
