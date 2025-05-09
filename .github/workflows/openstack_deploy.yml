@@ -51,94 +51,35 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform apply tfplan
 
-    - name: Extract Terraform Outputs and Debug
-      id: extract_outputs
+    - name: Discover VMs and Floating IPs from Terraform State
+      id: get_floating_ips
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
-        # ====> Step 1: Get Only JSON Lines <====
-        echo "🔍 Extracting JSON output from Terraform..."
+        echo "🔍 Fetching Terraform State..."
+        terraform state pull > terraform_state.json
         
-        MAX_RETRIES=3
-        ATTEMPT=1
-        while [ $ATTEMPT -le $MAX_RETRIES ]; do
-          terraform output -json | tee raw_output.json
-          sync  # Force buffer flush
+        echo "🔍 Parsing VM Instances..."
+        jq -r '
+          .resources[] | 
+          select(.type == "openstack_compute_instance_v2") | 
+          .instances[] | 
+          {
+            name: .attributes.name,
+            floating_ip: .attributes.network.0.floating_ip
+          }
+        ' terraform_state.json > vm_list.json
+        
+        echo "🔍 Discovered VMs and Floating IPs:"
+        cat vm_list.json
+        
+        # Initialize the IP list
+        > floating_ips.txt
 
-          # Check if JSON is valid, but allow whitespace tolerance
-          if jq -e '.' raw_output.json > /dev/null 2>&1; then
-            echo "✅ Valid JSON detected."
-            break
-          else
-            echo "⚠️ JSON output was incomplete. Retrying ($ATTEMPT/$MAX_RETRIES)..."
-            ATTEMPT=$((ATTEMPT + 1))
-            sleep 5
-          fi
-        done
+        # Loop through JSON and extract IPs
+        jq -r '.floating_ip' vm_list.json | grep -v null >> floating_ips.txt
 
-        if [ $ATTEMPT -gt $MAX_RETRIES ]; then
-          echo "❌ Failed to get valid JSON output from Terraform after $MAX_RETRIES attempts."
-          echo "🔍 JSON Dump:"
-          cat raw_output.json
-          exit 1
-        fi
-
-        # Clean the JSON by removing non-JSON lines and reconstructing
-        echo "🔍 Cleaning up JSON output..."
-        awk '/^{/{flag=1} flag' raw_output.json | sed '/^}/!d' > tf_output.json
-        
-        # ====> Step 2: Validate JSON <====
-        echo "🔍 Validating JSON format..."
-        if ! jq empty tf_output.json > /dev/null 2>&1; then
-          echo "❌ Terraform output is not valid JSON. Dumping contents:"
-          cat tf_output.json
-          exit 1
-        fi
-        
-        # ====> Step 3: Dump Full JSON <====
-        echo "🔍 Full JSON output from Terraform (validated):"
-        cat tf_output.json | tee tf_output.log
-
-        # ====> Step 4: List All Keys <====
-        echo "🔍 Top-level keys in Terraform output:"
-        jq 'keys' tf_output.json | tee keys.log
-        
-        # ====> Step 5: Parse Each Key Separately <====
-        
-        # 1. Floating IPs
-        if jq -e '.floating_ips.value' tf_output.json > /dev/null; then
-          echo "✅ floating_ips found, extracting IPs..."
-          jq '.floating_ips.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
-          echo "✅ Extracted Floating IPs:"
-          cat floating_ips.txt
-        else
-          echo "❌ 'floating_ips.value' not found or empty."
-        fi
-        
-        # 2. Additional NICs Ports
-        if jq -e '.additional_nics_ports.value' tf_output.json > /dev/null; then
-          echo "✅ additional_nics_ports found."
-          jq '.additional_nics_ports.value' tf_output.json > additional_nics_ports.log
-        else
-          echo "❌ 'additional_nics_ports.value' not found or empty."
-        fi
-        
-        # 3. Additional Volumes
-        if jq -e '.additional_volumes.value' tf_output.json > /dev/null; then
-          echo "✅ additional_volumes found."
-          jq '.additional_volumes.value' tf_output.json > additional_volumes.log
-        else
-          echo "❌ 'additional_volumes.value' not found or empty."
-        fi
-        
-        # 4. VM IDs
-        if jq -e '.vm_ids.value' tf_output.json > /dev/null; then
-          echo "✅ vm_ids found."
-          jq '.vm_ids.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > vm_ids.txt
-          echo "✅ Extracted VM IDs:"
-          cat vm_ids.txt
-        else
-          echo "❌ 'vm_ids.value' not found or empty."
-        fi
+        echo "✅ Floating IPs ready for SSH testing:"
+        cat floating_ips.txt
 
     - name: Terraform Destroy (Cleanup)
       if: always()
