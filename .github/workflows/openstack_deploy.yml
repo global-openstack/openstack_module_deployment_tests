@@ -214,11 +214,41 @@ jobs:
               exit 0
             fi
             
-            # Increment total VMs
+            # Increment total VMs safely
             (
               flock -x 200
-              count=$(cat total_vms.txt_
+              count=$(cat total_vms.txt)
+              echo $((count + 1)) > total_vms.txt
+            ) 200>/tmp/vm.lock
+            
+            # Run the check
+            ssh_check "$vm_name" "$ip_address"
+          ) &
+        done < floating_ips.txt
+        
+        # Wait for all background jobs to complete
+        wait
+        
+        # Summary Report
+        total_vms=$(cat total_vms.txt)
+        successful_vms=$(cat successful_vms.txt)
+        failed_vms=$(cat failed_vms.txt)
+        
+        echo "📋 SSH Connectivity Test Summary:"
+        echo "Total VMs Processed: $total_vms"
+        echo "Successfully Connected: $successful_vms"
+        echo "Failed Connections: $failed_vms"
 
+        if [ "$successful_vms" -gt 0 ]; then
+          echo "✅ Successfully Connected VMs:"
+          cat success_list.txt
+        fi
+
+        if [ "$failed_vms" -gt 0 ]; then
+          echo "❌ Failed to Connect VMs:"
+          cat failed_list.txt
+        fi
+        
     - name: Terraform Destroy (Cleanup)
       if: always()
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
