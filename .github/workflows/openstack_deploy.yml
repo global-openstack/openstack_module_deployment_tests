@@ -90,17 +90,33 @@ jobs:
         echo "🔍 Fetching Terraform Outputs..."
         
         # Get the floating IPs directly from Terraform
+        echo "Fetching floating IPs..."
         terraform output -json floating_ips > floating_ips.json
 
         echo "🔍 Raw Terraform Output:"
         cat floating_ips.json
 
         echo "🔍 Validating JSON format..."
-        if ! jq empty floating_ips.json > /dev/null 2>&1; then
-          echo "❌ The floating_ips.json is not valid JSON."
-          cat floating_ips.json
-          exit 1
-        fi
+        
+        # Validate JSON format and retry if it's not valid
+        max_retries=3
+        for attempt in $(seq 1 $max_retries); do
+          if jq empty floating_ips.json > /dev/null 2>&1; then
+            echo "✅ JSON is valid."
+            break
+          else
+            echo "❌ The floating_ips.json is not valid JSON (attempt $attempt)."
+            if [ "$attempt" -lt "$max_retries" ]; then
+              echo "🔄 Retrying in 5 seconds..."
+              sleep 5
+              terraform output -json floating_ips > floating_ips.json
+            else
+              echo "🔥 Maximum retries reached. Failing."
+              cat floating_ips.json
+              exit 1
+            fi
+          fi
+        done
 
         echo "🔍 Parsing Floating IPs..."
         
