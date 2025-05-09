@@ -51,38 +51,44 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform apply tfplan
 
-    - name: Discover VMs and Floating IPs from Terraform State
+    - name: Discover Floating IPs from Terraform State
       id: get_floating_ips
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔍 Fetching Terraform State..."
         terraform state pull > terraform_state.json
         
-        echo "🔍 Parsing VM Instances..."
+        # Validate JSON structure
+        echo "🔍 Validating Terraform State JSON..."
+        if ! jq empty terraform_state.json > /dev/null 2>&1; then
+          echo "❌ Terraform state JSON is not valid. Dumping contents:"
+          cat terraform_state.json
+          exit 1
+        fi
         
-        # Enhanced parsing to handle networks and IPs
+        echo "🔍 Parsing Floating IP Associations..."
+        
+        # Enhanced parsing to extract only floating IPs and their VM names
         jq -r '
           .resources[] | 
-          select(.type == "openstack_compute_instance_v2") | 
+          select(.type == "openstack_networking_floatingip_associate_v2") | 
           .instances[] | 
           {
-            name: .attributes.name,
-            networks: .attributes.network
+            name: .index_key,
+            floating_ip: .attributes.floating_ip
           }
-        ' terraform_state.json > vm_list.json
+        ' terraform_state.json > fip_list.json
         
-        echo "🔍 Discovered VMs and Network Configurations:"
-        cat vm_list.json
+        echo "🔍 Discovered Floating IP Associations:"
+        cat fip_list.json
         
         # Initialize the IP list
         > floating_ips.txt
 
         # Loop through JSON and extract Floating IPs
-        jq -c '.networks[]' vm_list.json | while read -r network; do
-          echo "🔍 Checking network block: $network"
-          floating_ip=$(echo "$network" | jq -r '.floating_ip')
-          if [ "$floating_ip" != "null" ]; then
-            echo "$floating_ip" >> floating_ips.txt
+        jq -c '.floating_ip' fip_list.json | while read -r ip; do
+          if [ "$ip" != "null" ]; then
+            echo "$ip" | tr -d '"' >> floating_ips.txt
           fi
         done
         
