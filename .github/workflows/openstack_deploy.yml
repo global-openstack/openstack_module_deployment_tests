@@ -145,16 +145,22 @@ jobs:
           done
 
           echo "🔌 Connecting to $vm_name ($ip_address)..."
+          connection_success=0
           for i in {1..5}; do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
-            echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
-            sleep 5
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
+              echo "✅ Connection to $vm_name successful!"
+              connection_success=1
+              break
+            else
+              echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
+              sleep 5
+            fi
           done
 
-          if [ $? -eq 0 ]; then
-            echo "✅ Connection to $vm_name successful!"
-          else
+          if [ $connection_success -eq 0 ]; then
             echo "❌ Connection to $vm_name failed after 5 attempts."
+            # Optionally: If you want it to fail the build, uncomment below
+            # exit 1
           fi
         done < floating_ips.txt
 
