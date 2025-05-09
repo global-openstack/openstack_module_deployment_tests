@@ -102,7 +102,6 @@ jobs:
         else
           echo "❌ 'vm_ids.value' not found or empty."
         fi
-
     - name: Test SSH Connectivity with Retry
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
