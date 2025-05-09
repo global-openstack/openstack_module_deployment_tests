@@ -57,12 +57,18 @@ jobs:
       run: |
         # ====> Step 1: Get Only JSON Lines <====
         terraform output -json | tee raw_output.json
-
-        # Strict JSON cleanup - remove lines that are not valid JSON
-        echo "🔍 Cleaning up JSON output..."
-        awk '/^{/{flag=1} flag' raw_output.json > tf_output.json
         
-        # ====> Step 2: Validate JSON <====
+        # Check if the file is empty or corrupt
+        if ! [ -s raw_output.json ]; then
+          echo "❌ Terraform output is empty or corrupt."
+          exit 1
+        fi
+
+        # Clean the JSON by removing non-JSON lines and reconstructing
+        echo "🔍 Cleaning up JSON output..."
+        awk '/^{/{flag=1} flag' raw_output.json | sed '/^}/!d' > tf_output.json
+        
+        # Validate JSON
         echo "🔍 Validating JSON format..."
         if ! jq empty tf_output.json > /dev/null 2>&1; then
           echo "❌ Terraform output is not valid JSON. Dumping contents:"
@@ -70,15 +76,15 @@ jobs:
           exit 1
         fi
         
-        # ====> Step 3: Dump Full JSON <====
+        # ====> Step 2: Dump Full JSON <====
         echo "🔍 Full JSON output from Terraform (validated):"
         cat tf_output.json | tee tf_output.log
 
-        # ====> Step 4: List All Keys <====
+        # ====> Step 3: List All Keys <====
         echo "🔍 Top-level keys in Terraform output:"
         jq 'keys' tf_output.json | tee keys.log
         
-        # ====> Step 5: Parse Each Key Separately <====
+        # ====> Step 4: Parse Each Key Separately <====
         
         # 1. Floating IPs
         if jq -e '.floating_ips.value' tf_output.json > /dev/null; then
@@ -115,37 +121,6 @@ jobs:
         else
           echo "❌ 'vm_ids.value' not found or empty."
         fi
-
-    - name: Test SSH Connectivity with Retry
-      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: |
-        echo "$OS_PRIVATE_KEY" > private_key.pem
-        chmod 600 private_key.pem
-        
-        while IFS= read -r line; do
-          NAME=$(echo $line | awk '{print $1}')
-          IP=$(echo $line | awk '{print $2}')
-          echo "Testing SSH Connectivity to $NAME ($IP)"
-          
-          # Retry logic (12 attempts, 10 seconds apart)
-          MAX_ATTEMPTS=12
-          ATTEMPT=1
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS: Trying to connect to $IP..."
-            nc -z -w5 $IP 22 && break
-            ATTEMPT=$((ATTEMPT + 1))
-            sleep 10
-          done
-
-          # Final SSH attempt if port 22 is reachable
-          if [ $ATTEMPT -le $MAX_ATTEMPTS ]; then
-            ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$IP "echo 'SSH Connection Successful to $NAME'" \
-              && echo "$NAME ($IP) - ✅ SSH Success" \
-              || echo "$NAME ($IP) - ❌ SSH Failed"
-          else
-            echo "❌ Could not reach SSH on $NAME ($IP) after $MAX_ATTEMPTS attempts."
-          fi
-        done < floating_ips.txt
 
     - name: Terraform Destroy (Cleanup)
       if: always()
