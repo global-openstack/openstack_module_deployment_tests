@@ -89,18 +89,23 @@ jobs:
       run: |
         echo "🔍 Fetching Terraform Outputs..."
         
-        # Get the floating IPs directly from Terraform, filter only JSON
+        # Get the floating IPs directly from Terraform, force strict JSON extraction
         echo "Fetching floating IPs..."
-        terraform output -json floating_ips 2> /dev/null | jq . > floating_ips.json
-
-        echo "🔍 Raw Terraform Output (sanitized):"
-        cat floating_ips.json
-
-        echo "🔍 Validating JSON format..."
         
-        # Validate JSON format and retry if it's not valid
         max_retries=3
         for attempt in $(seq 1 $max_retries); do
+          echo "🔄 Attempt $attempt of $max_retries..."
+
+          # Force strict JSON parsing, only allow pure JSON object
+          terraform output -json floating_ips 2> /dev/null | \
+          awk 'BEGIN { in_json=0 } /^{/ { in_json=1 } in_json { print } /^}/ { in_json=0 }' > floating_ips.json
+          
+          echo "🔍 Raw Terraform Output (sanitized):"
+          cat floating_ips.json
+
+          echo "🔍 Validating JSON format..."
+          
+          # Validate JSON format
           if jq empty floating_ips.json > /dev/null 2>&1; then
             echo "✅ JSON is valid."
             break
@@ -109,7 +114,6 @@ jobs:
             if [ "$attempt" -lt "$max_retries" ]; then
               echo "🔄 Retrying in 5 seconds..."
               sleep 5
-              terraform output -json floating_ips 2> /dev/null | jq . > floating_ips.json
             else
               echo "🔥 Maximum retries reached. Failing."
               cat floating_ips.json
