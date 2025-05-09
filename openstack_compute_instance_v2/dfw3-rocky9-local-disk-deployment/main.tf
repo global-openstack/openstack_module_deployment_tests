@@ -17,11 +17,11 @@ module "openstack_vm" {
   network_name        = "DMZ-Network"
   subnet_name         = "dmz-subnet"
 
-  additional_nics = [
-    {
-      network_name = "Inside-Network"
-      subnet_name  = "inside-subnet"
-      security_groups = ["inside-sg"]
-    }
-  ]
+  #additional_nics = [
+  #  {
+  #    network_name = "Inside-Network"
+  #    subnet_name  = "inside-subnet"
+  #    security_groups = ["inside-sg"]
+  #  }
+  #]
 }

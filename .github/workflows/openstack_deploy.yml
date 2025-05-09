@@ -43,9 +43,43 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform init
 
-    - name: Terraform Apply
+    - name: Terraform Apply with Retry Logic
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: terraform apply -auto-approve | tee terraform_apply.log
+      run: |
+        echo "🚀 Starting Terraform Apply with Retry Logic..."
+
+        max_retries=5
+        delay=15
+
+        for attempt in $(seq 1 $max_retries); do
+          echo "🔄 Attempt $attempt of $max_retries..."
+          terraform apply -auto-approve | tee terraform_apply.log
+
+          if grep -q "Apply complete!" terraform_apply.log; then
+            echo "✅ Terraform Apply completed successfully!"
+            break
+          else
+            echo "❌ Terraform Apply failed. Checking for OpenStack API errors..."
+            if grep -q "openstack" terraform_apply.log; then
+              echo "🕒 Waiting $delay seconds before retrying..."
+              sleep $delay
+            else
+              echo "⚠️ Non-retryable error detected. Exiting."
+              cat terraform_apply.log
+              exit 1
+            fi
+          fi
+
+          if [ "$attempt" -eq "$max_retries" ]; then
+            echo "🔥 Maximum retries reached. Terraform Apply failed."
+            exit 1
+          fi
+        done
+
+    - name: Set SSH Key Permissions
+      run: |
+        chmod 600 $OS_PRIVATE_KEY
+        ls -la $OS_PRIVATE_KEY
 
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
@@ -56,10 +90,24 @@ jobs:
         # Get the floating IPs directly from Terraform
         terraform output -json floating_ips > floating_ips.json
 
+        echo "🔍 Raw Terraform Output:"
+        cat floating_ips.json
+
+        echo "🔍 Validating JSON format..."
+        if ! jq empty floating_ips.json > /dev/null 2>&1; then
+          echo "❌ The floating_ips.json is not valid JSON."
+          cat floating_ips.json
+          exit 1
+        fi
+
         echo "🔍 Parsing Floating IPs..."
         
-        # Instead of checking with `jq empty`, parse it directly
-        jq -r 'to_entries[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt
+        # Use jq to parse, but also add debug for failures
+        if ! jq -r 'to_entries[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt; then
+          echo "❌ jq Parsing Failed. Dumping raw JSON:"
+          cat floating_ips.json
+          exit 1
+        fi
 
         # Validate output
         if [ ! -s floating_ips.txt ]; then
@@ -70,32 +118,29 @@ jobs:
         echo "✅ Floating IPs found and ready for SSH testing:"
         cat floating_ips.txt
         
-        # Set SSH key permissions for security
-        chmod 600 $OS_PRIVATE_KEY
+        # Export to environment
+        echo "FLOATING_IPS=$(cat floating_ips.txt)" >> $GITHUB_ENV
 
     - name: SSH Connectivity Test
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔌 Starting SSH Connectivity Test..."
-
         while IFS= read -r line; do
           vm_name=$(echo $line | awk '{print $1}')
           ip_address=$(echo $line | awk '{print $2}')
           
           echo "Attempting to SSH into $vm_name at $ip_address..."
-
-          retry_count=5
-          for ((i=1; i<=retry_count; i++)); do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $OS_PRIVATE_KEY ${DEFAULT_SSH_USER}@$ip_address "hostname" && break || {
-              echo "SSH attempt $i failed...retrying in 5 seconds."
-              sleep 5
-            }
+          
+          for i in {1..5}; do
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $OS_PRIVATE_KEY ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
+            echo "SSH attempt $i failed...retrying in 5 seconds."
+            sleep 5
           done
 
           if [ $? -eq 0 ]; then
             echo "✅ SSH connection to $vm_name ($ip_address) successful!"
           else
-            echo "❌ SSH connection to $vm_name ($ip_address) failed after $retry_count attempts."
+            echo "❌ SSH connection to $vm_name ($ip_address) failed after 5 attempts."
           fi
         done < floating_ips.txt
 
