@@ -137,14 +137,11 @@ jobs:
         # Ensure correct line endings
         sed -i 's/\r$//' floating_ips.txt
 
-        # Initialize counters
-        total_vms=0
-        successful_vms=0
-        failed_vms=0
-
-        # Arrays to store success and failure
-        successful_list=()
-        failed_list=()
+        # Initialize shared files
+        touch success_list.txt failed_list.txt
+        echo 0 > total_vms.txt
+        echo 0 > successful_vms.txt
+        echo 0 > failed_vms.txt
 
         # Function to run SSH checks in parallel
         ssh_check() {
@@ -166,8 +163,12 @@ jobs:
           
           if [ "$i" -eq 5 ]; then
             echo "⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
-            failed_list+=("$vm_name ($ip_address)")
-            ((failed_vms++))
+            (
+              flock -x 200
+              echo "$vm_name ($ip_address)" >> failed_list.txt
+              count=$(cat failed_vms.txt)
+              echo $((count + 1)) > failed_vms.txt
+            ) 200>/tmp/vm.lock
             return
           fi
 
@@ -177,8 +178,12 @@ jobs:
           for i in {1..5}; do
             if timeout 15 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
               echo "✅ Connection to $vm_name successful!"
-              successful_list+=("$vm_name ($ip_address)")
-              ((successful_vms++))
+              (
+                flock -x 200
+                echo "$vm_name ($ip_address)" >> success_list.txt
+                count=$(cat successful_vms.txt)
+                echo $((count + 1)) > successful_vms.txt
+              ) 200>/tmp/vm.lock
               return
             else
               echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
@@ -187,48 +192,32 @@ jobs:
           done
 
           echo "❌ Connection to $vm_name failed after 5 attempts."
-          failed_list+=("$vm_name ($ip_address)")
-          ((failed_vms++))
+          (
+            flock -x 200
+            echo "$vm_name ($ip_address)" >> failed_list.txt
+            count=$(cat failed_vms.txt)
+            echo $((count + 1)) > failed_vms.txt
+          ) 200>/tmp/vm.lock
         }
 
         # Read each line and execute the SSH check in the background
         while IFS= read -r line; do
-          total_vms=$((total_vms + 1))
           echo "🔄 Processing line: '$line'"
-
-          # Split into name and IP
-          vm_name=$(echo $line | awk -F':' '{print $1}')
-          ip_address=$(echo $line | awk -F':' '{print $2}')
-
-          # If empty, skip it
-          if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
-            echo "⚠️ Skipping empty or malformed line: $line"
-            continue
-          fi
-          
-          # Run the check in parallel
-          ssh_check "$vm_name" "$ip_address" &
-        
-        done < floating_ips.txt
-        
-        # Wait for all background jobs to complete
-        wait
-        
-        # Summary Report
-        echo "📋 SSH Connectivity Test Summary:"
-        echo "Total VMs Processed: $total_vms"
-        echo "Successfully Connected: $successful_vms"
-        echo "Failed Connections: $failed_vms"
-
-        if [ $successful_vms -gt 0 ]; then
-          echo "✅ Successfully Connected VMs:"
-          printf '%s\n' "${successful_list[@]}"
-        fi
-
-        if [ $failed_vms -gt 0 ]; then
-          echo "❌ Failed to Connect VMs:"
-          printf '%s\n' "${failed_list[@]}"
-        fi
+          (
+            # Split into name and IP
+            vm_name=$(echo $line | awk -F':' '{print $1}')
+            ip_address=$(echo $line | awk -F':' '{print $2}')
+            
+            # If empty, skip it
+            if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
+              echo "⚠️ Skipping empty or malformed line: $line"
+              exit 0
+            fi
+            
+            # Increment total VMs
+            (
+              flock -x 200
+              count=$(cat total_vms.txt_
 
     - name: Terraform Destroy (Cleanup)
       if: always()
