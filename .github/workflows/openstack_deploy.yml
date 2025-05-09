@@ -47,6 +47,7 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🚀 Starting Terraform Apply..."
+        start_time=$(date +%s)
 
         max_retries=5
         delay=15
@@ -74,6 +75,10 @@ jobs:
             exit 1
           fi
         done
+
+        end_time=$(date +%s)
+        duration=$((end_time - start_time))
+        echo "⏱️ Terraform Apply Duration: $((duration / 60)) minutes and $((duration % 60)) seconds"
 
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
@@ -124,26 +129,21 @@ jobs:
         chmod 600 "$PRIVATE_KEY_PATH"
         echo "✅ Private key is accessible at $PRIVATE_KEY_PATH."
 
-    - name: SSH Connectivity Test (Parallelized)
+    - name: SSH Connectivity Test (Parallelized with Batching and Timer)
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔌 Starting SSH Connectivity Test (Parallelized)..."
-        echo "📄 Reading floating IPs from floating_ips.txt"
+        test_start_time=$(date +%s)
         
-        # Log file for debugging
-        echo "📝 Debugging floating_ips.txt content:"
-        cat floating_ips.txt
-        
-        # Ensure correct line endings
-        sed -i 's/\r$//' floating_ips.txt
-
         # Initialize shared files
         touch success_list.txt failed_list.txt
         echo 0 > total_vms.txt
         echo 0 > successful_vms.txt
         echo 0 > failed_vms.txt
 
-        # Function to run SSH checks in parallel
+        # Maximum parallel jobs
+        batch_size=10
+
         ssh_check() {
           local vm_name=$1
           local ip_address=$2
@@ -151,7 +151,6 @@ jobs:
 
           echo "$(date) 🌐 Checking SSH port availability for $vm_name ($ip_address)..."
           
-          # Retry loop for port availability with a timeout
           for i in {1..5}; do
             if timeout 10 nc -z -w5 $ip_address 22; then
               echo "$(date) 🔌 Port 22 is open for $vm_name ($ip_address)"
@@ -162,98 +161,50 @@ jobs:
               retry_delay=$((retry_delay * 2))
             fi
           done
-          
+
           if [ "$i" -eq 5 ]; then
             echo "$(date) ⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
-            (
-              flock -x 200
-              echo "$vm_name ($ip_address)" >> failed_list.txt
-              count=$(cat failed_vms.txt)
-              echo $((count + 1)) > failed_vms.txt
-            ) 200>/tmp/vm.lock
+            echo "$vm_name ($ip_address)" >> failed_list.txt
             return
           fi
 
           echo "$(date) 🔌 Connecting to $vm_name ($ip_address)..."
           
-          # Retry loop for SSH connectivity with a timeout
-          for i in {1..5}; do
-            if timeout 15 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
-              echo "$(date) ✅ Connection to $vm_name successful!"
-              (
-                flock -x 200
-                echo "$vm_name ($ip_address)" >> success_list.txt
-                count=$(cat successful_vms.txt)
-                echo $((count + 1)) > successful_vms.txt
-              ) 200>/tmp/vm.lock
-              return
-            else
-              echo "$(date) ⚠️ SSH attempt $i failed...retrying in 5 seconds."
-              sleep $retry_delay
-              retry_delay=$((retry_delay * 2))
-            fi
-          done
-
-          echo "$(date) ❌ Connection to $vm_name failed after 5 attempts."
-          (
-            flock -x 200
+          if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
+            echo "$(date) ❌ Connection to $vm_name failed."
             echo "$vm_name ($ip_address)" >> failed_list.txt
-            count=$(cat failed_vms.txt)
-            echo $((count + 1)) > failed_vms.txt
-          ) 200>/tmp/vm.lock
+          else
+            echo "$(date) ✅ Connection to $vm_name successful!"
+            echo "$vm_name ($ip_address)" >> success_list.txt
+          fi
         }
 
         # Read each line and execute the SSH check in the background
         while IFS= read -r line; do
-          echo "$(date) 🔄 Processing line: '$line'"
           (
-            # Split into name and IP
             vm_name=$(echo $line | awk -F':' '{print $1}')
             ip_address=$(echo $line | awk -F':' '{print $2}')
-            
-            # If empty, skip it
-            if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
-              echo "⚠️ Skipping empty or malformed line: $line"
-              exit 0
-            fi
-            
-            # Increment total VMs safely
-            (
-              flock -x 200
-              count=$(cat total_vms.txt)
-              echo $((count + 1)) > total_vms.txt
-            ) 200>/tmp/vm.lock
-            
-            # Run the check
             ssh_check "$vm_name" "$ip_address"
           ) &
+
+          while [ "$(jobs | wc -l)" -ge "$batch_size" ]; do
+            sleep 1
+          done
         done < floating_ips.txt
         
-        # Wait for all background jobs to complete
         wait
-        
-        # Summary Report
-        total_vms=$(cat total_vms.txt)
-        successful_vms=$(cat successful_vms.txt)
-        failed_vms=$(cat failed_vms.txt)
-        
-        echo "📋 SSH Connectivity Test Summary:"
-        echo "Total VMs Processed: $total_vms"
-        echo "Successfully Connected: $successful_vms"
-        echo "Failed Connections: $failed_vms"
+        sort success_list.txt -o success_list.txt
+        sort failed_list.txt -o failed_list.txt
 
-        if [ "$successful_vms" -gt 0 ]; then
-          echo "✅ Successfully Connected VMs:"
-          cat success_list.txt
-        fi
+        echo "✅ Successfully Connected VMs:"
+        cat success_list.txt
 
-        if [ "$failed_vms" -gt 0 ]; then
-          echo "❌ Failed to Connect VMs:"
-          cat failed_list.txt
-        fi
+        echo "❌ Failed to Connect VMs:"
+        cat failed_list.txt
 
-        # Clean up the lock file
-        rm -f /tmp/vm.lock
+        test_end_time=$(date +%s)
+        test_duration=$((test_end_time - test_start_time))
+        echo "⏱️ SSH Connectivity Test Duration: $((test_duration / 60)) minutes and $((test_duration % 60)) seconds"
 
     - name: Terraform Destroy (Cleanup)
       if: always()
