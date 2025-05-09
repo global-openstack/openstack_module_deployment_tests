@@ -45,30 +45,27 @@ jobs:
 
     - name: Terraform Apply
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: terraform apply -auto-approve
+      run: terraform apply -auto-approve | tee terraform_apply.log
 
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔍 Fetching Terraform Outputs..."
-        terraform output -json > terraform_outputs.json
         
-        echo "🔍 Validating Terraform Outputs JSON..."
-        if ! jq empty terraform_outputs.json > /dev/null 2>&1; then
+        # Get the floating IPs directly from Terraform
+        terraform output -json floating_ips > floating_ips.json
+
+        echo "🔍 Validating Floating IPs JSON..."
+        if ! jq empty floating_ips.json > /dev/null 2>&1; then
           echo "❌ Terraform output JSON is not valid. Dumping contents:"
-          cat terraform_outputs.json
+          cat floating_ips.json
           exit 1
         fi
 
         echo "🔍 Parsing Floating IPs..."
-        
-        # Corrected jq parsing to match the output structure
-        jq -r '
-          .floating_ips.value | to_entries[] | 
-          "\(.key) \(.value)"
-        ' terraform_outputs.json > floating_ips.txt
-        
+        jq -r 'to_entries[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt
+
         # Validate output
         if [ ! -s floating_ips.txt ]; then
           echo "❌ No Floating IPs found."
@@ -77,24 +74,33 @@ jobs:
 
         echo "✅ Floating IPs found and ready for SSH testing:"
         cat floating_ips.txt
+        
+        # Set SSH key permissions for security
+        chmod 600 $OS_PRIVATE_KEY
 
     - name: SSH Connectivity Test
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔌 Starting SSH Connectivity Test..."
-        
+
         while IFS= read -r line; do
           vm_name=$(echo $line | awk '{print $1}')
           ip_address=$(echo $line | awk '{print $2}')
           
           echo "Attempting to SSH into $vm_name at $ip_address..."
 
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $OS_PRIVATE_KEY ${DEFAULT_SSH_USER}@$ip_address "hostname" &>/dev/null
-          
+          retry_count=5
+          for ((i=1; i<=retry_count; i++)); do
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $OS_PRIVATE_KEY ${DEFAULT_SSH_USER}@$ip_address "hostname" && break || {
+              echo "SSH attempt $i failed...retrying in 5 seconds."
+              sleep 5
+            }
+          done
+
           if [ $? -eq 0 ]; then
             echo "✅ SSH connection to $vm_name ($ip_address) successful!"
           else
-            echo "❌ SSH connection to $vm_name ($ip_address) failed."
+            echo "❌ SSH connection to $vm_name ($ip_address) failed after $retry_count attempts."
           fi
         done < floating_ips.txt
 
