@@ -1,4 +1,4 @@
-# OpenStack Terraform Module Deployment Examples - CI/CD with GitHub Actions
+# OpenStack Terraform Module Deployment Tests - CI/CD with GitHub Actions
 
 This repository contains automated deployment tests for OpenStack VMs using the **openstack_compute_instance_v2** Terraform module. The deployments are triggered and managed using **GitHub Actions** to ensure consistent and repeatable infrastructure provisioning.
 
