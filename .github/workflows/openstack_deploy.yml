@@ -153,9 +153,9 @@ jobs:
           
           echo "🌐 Checking SSH port availability for $vm_name ($ip_address)..."
           
-          # Retry loop for port availability
+          # Retry loop for port availability with a timeout
           for i in {1..5}; do
-            if nc -z -w5 $ip_address 22; then
+            if timeout 10 nc -z -w5 $ip_address 22; then
               echo "🔌 Port 22 is open for $vm_name ($ip_address)"
               break
             else
@@ -167,14 +167,16 @@ jobs:
           # Verify if we actually tried all 5 attempts and still failed
           if [ "$i" -eq 5 ]; then
             echo "⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
+            echo "🔄 Moving to the next VM..."
+            continue  # Skip to the next VM in case of repeated failure
           fi
 
           echo "🔌 Connecting to $vm_name ($ip_address)..."
           connection_success=0
           
-          # Retry loop for SSH connectivity
+          # Retry loop for SSH connectivity with a timeout
           for i in {1..5}; do
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
+            if timeout 15 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
               echo "✅ Connection to $vm_name successful!"
               connection_success=1
               break
@@ -187,6 +189,8 @@ jobs:
           # If still unsuccessful after 5 attempts
           if [ $connection_success -eq 0 ]; then
             echo "❌ Connection to $vm_name failed after 5 attempts."
+            echo "🔄 Moving to the next VM..."
+            continue  # Explicitly continue to avoid blocking
           fi
 
           echo "🔄 Moving to the next VM..."
