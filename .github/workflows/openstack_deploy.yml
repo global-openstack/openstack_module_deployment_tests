@@ -56,7 +56,18 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         terraform output -json > tf_output.json
+        
+        # Check if tf_output.json is valid JSON
+        if ! jq empty tf_output.json > /dev/null 2>&1; then
+          echo "❌ Terraform output is not valid JSON. Dumping contents:"
+          cat tf_output.json
+          exit 1
+        fi
+        
+        # Proceed with extraction if JSON is valid
         jq -r '.floating_ips | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
+        
+        echo "✅ Extracted Floating IPs:"
         cat floating_ips.txt
       
     - name: Test SSH Connectivity with Retry
