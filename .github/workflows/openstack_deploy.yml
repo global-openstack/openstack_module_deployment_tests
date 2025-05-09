@@ -55,8 +55,12 @@ jobs:
       id: extract_outputs
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
-        terraform output -json > tf_output.json
+        # Get only valid JSON lines
+        terraform output -json | tee tf_output.json
         
+        # Remove any lines that are not JSON (e.g., logs, debug lines)
+        sed -i '/^{/!d' tf_output.json
+
         # ====> Step 1: Dump Full JSON <====
         echo "🔍 Full JSON output from Terraform:"
         cat tf_output.json | tee tf_output.log
@@ -102,6 +106,7 @@ jobs:
         else
           echo "❌ 'vm_ids.value' not found or empty."
         fi
+
     - name: Test SSH Connectivity with Retry
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
