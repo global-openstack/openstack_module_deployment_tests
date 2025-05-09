@@ -28,13 +28,14 @@ jobs:
       OS_REGION_NAME: ${{ secrets.OS_REGION_NAME }}
       OS_INTERFACE: ${{ secrets.OS_INTERFACE }}
       OS_IDENTITY_API_VERSION: ${{ secrets.OS_IDENTITY_API_VERSION }}
+      OS_PRIVATE_KEY: ${{ secrets.OS_PRIVATE_KEY }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
 
     - name: Set up Terraform
-      uses: hashicorp/setup-terraform@v2   # <-- Upgraded from v1 to v2
+      uses: hashicorp/setup-terraform@v2
       with:
         terraform_version: 1.5.7
 
@@ -49,6 +50,45 @@ jobs:
     - name: Terraform Apply
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform apply tfplan
+
+    - name: Extract Floating IPs
+      id: extract_ips
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        terraform output -json > tf_output.json
+        jq -r '.floating_ips | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
+        cat floating_ips.txt
+      
+    - name: Test SSH Connectivity with Retry
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        echo "$OS_PRIVATE_KEY" > private_key.pem
+        chmod 600 private_key.pem
+        
+        while IFS= read -r line; do
+          NAME=$(echo $line | awk '{print $1}')
+          IP=$(echo $line | awk '{print $2}')
+          echo "Testing SSH Connectivity to $NAME ($IP)"
+          
+          # Retry logic (12 attempts, 10 seconds apart)
+          MAX_ATTEMPTS=12
+          ATTEMPT=1
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS: Trying to connect to $IP..."
+            nc -z -w5 $IP 22 && break
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 10
+          done
+
+          # Final SSH attempt if port 22 is reachable
+          if [ $ATTEMPT -le $MAX_ATTEMPTS ]; then
+            ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$IP "echo 'SSH Connection Successful to $NAME'" \
+              && echo "$NAME ($IP) - ✅ SSH Success" \
+              || echo "$NAME ($IP) - ❌ SSH Failed"
+          else
+            echo "❌ Could not reach SSH on $NAME ($IP) after $MAX_ATTEMPTS attempts."
+          fi
+        done < floating_ips.txt
 
     - name: Terraform Destroy (Cleanup)
       if: always()
