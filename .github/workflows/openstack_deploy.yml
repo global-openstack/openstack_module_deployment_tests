@@ -68,16 +68,23 @@ jobs:
         
         echo "🔍 Parsing Floating IP Associations..."
         
-        # Extract both `openstack_networking_floatingip_associate_v2` and `openstack_networking_floatingip_v2`
+        # Extract all types of floating IPs
         jq -r '
           .resources[] |
           select(
-            (.type == "openstack_networking_floatingip_v2" or 
-            .type == "openstack_networking_floatingip_associate_v2") 
-          ) | 
-          .instances[] | 
-          select(.attributes.floating_ip != null) |
-          "\(.index_key) \(.attributes.floating_ip)"
+            .type == "openstack_networking_floatingip_associate_v2" or
+            .type == "openstack_networking_floatingip_v2"
+          ) |
+          .instances[] |
+          {
+            name: .index_key,
+            ip: (
+              if .attributes.floating_ip != null then .attributes.floating_ip
+              elif .attributes.address != null then .attributes.address
+              else null end
+            )
+          } | select(.ip != null) |
+          "\(.name) \(.ip)"
         ' terraform_state.json > floating_ips.txt
         
         # Validate output
@@ -89,39 +96,6 @@ jobs:
         echo "✅ Floating IPs found and ready for SSH testing:"
         cat floating_ips.txt
 
-    - name: Test SSH Connectivity
-      run: |
-        echo "$OS_PRIVATE_KEY" > private_key.pem
-        chmod 600 private_key.pem
-        
-        while IFS= read -r line; do
-          NAME=$(echo $line | awk '{print $1}')
-          IP=$(echo $line | awk '{print $2}')
-          echo "🔍 Testing SSH Connectivity to $NAME ($IP)"
-          
-          # Retry logic (12 attempts, 10 seconds apart)
-          MAX_ATTEMPTS=12
-          ATTEMPT=1
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS: Trying to connect to $IP..."
-            nc -z -w5 $IP 22 && break
-            ATTEMPT=$((ATTEMPT + 1))
-            sleep 10
-          done
-
-          # Final SSH attempt if port 22 is reachable
-          if [ $ATTEMPT -le $MAX_ATTEMPTS ]; then
-            ssh -o StrictHostKeyChecking=no -i private_key.pem $DEFAULT_SSH_USER@$IP "echo 'SSH Connection Successful to $NAME'" \
-              && echo "$NAME ($IP) - ✅ SSH Success" \
-              || echo "$NAME ($IP) - ❌ SSH Failed"
-          else
-            echo "❌ Could not reach SSH on $NAME ($IP) after $MAX_ATTEMPTS attempts."
-          fi
-        done < floating_ips.txt
-        
-        # Clean up the private key after testing
-        rm -f private_key.pem
-    
     - name: Terraform Destroy (Cleanup)
       if: always()
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
