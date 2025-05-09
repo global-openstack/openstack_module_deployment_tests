@@ -1,4 +1,4 @@
-name: OpenStack Terraform Deployment
+name: OpenStack Terraform Deployment Test
 
 on:
   push:
