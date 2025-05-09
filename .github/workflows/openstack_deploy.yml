@@ -96,10 +96,9 @@ jobs:
         for attempt in $(seq 1 $max_retries); do
           echo "🔄 Attempt $attempt of $max_retries..."
 
-          # Force strict JSON parsing, only allow pure JSON object
-          terraform output -json floating_ips 2> /dev/null | \
-          awk 'BEGIN { in_json=0 } /^{/ { in_json=1 } in_json { print } /^}/ { in_json=0 }' > floating_ips.json
-          
+          # Directly write the output, no awk manipulation
+          terraform output -json floating_ips > floating_ips.json
+
           echo "🔍 Raw Terraform Output (sanitized):"
           cat floating_ips.json
 
