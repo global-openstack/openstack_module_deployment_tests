@@ -89,15 +89,15 @@ jobs:
       run: |
         echo "🔍 Fetching Terraform Outputs..."
         
-        # Get the floating IPs directly from Terraform, force strict JSON extraction
+        # Get the floating IPs directly from Terraform, capture only the first JSON object
         echo "Fetching floating IPs..."
         
         max_retries=3
         for attempt in $(seq 1 $max_retries); do
           echo "🔄 Attempt $attempt of $max_retries..."
 
-          # Get the raw JSON and strip non-JSON lines using sed
-          terraform output -json floating_ips | sed 's/^[^{]*{//' | sed 's/}[^}]*$/}/' > floating_ips.json
+          # Get the raw JSON output, only take the first valid JSON object
+          terraform output -json floating_ips | head -n 1 > floating_ips.json
 
           echo "🔍 Raw Terraform Output (sanitized):"
           cat floating_ips.json
