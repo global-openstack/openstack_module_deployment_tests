@@ -14,7 +14,6 @@ jobs:
       matrix:
         scenario: [
           "dfw3-rocky9-local-disk-deployment",
-          "dfw3-rocky9-volume-deployment"
         ]
 
     env:
@@ -68,7 +67,7 @@ jobs:
         
         echo "🔍 Parsing Floating IP Associations..."
         
-        # Extract all types of floating IPs
+        # Extract all types of floating IPs gracefully
         jq -r '
           .resources[] |
           select(
@@ -81,7 +80,7 @@ jobs:
             ip: (
               if .attributes.floating_ip != null then .attributes.floating_ip
               elif .attributes.address != null then .attributes.address
-              else null end
+              else empty end
             )
           } | select(.ip != null) |
           "\(.name) \(.ip)"
