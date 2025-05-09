@@ -63,10 +63,10 @@ jobs:
           cat tf_output.json
           exit 1
         fi
-        
-        # Proceed with extraction if JSON is valid
-        jq -r '.floating_ips | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
-        
+
+        # Parse only the "value" object from the JSON
+        jq '.floating_ips.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
+
         echo "✅ Extracted Floating IPs:"
         cat floating_ips.txt
       
