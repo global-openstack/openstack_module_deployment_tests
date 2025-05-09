@@ -104,13 +104,9 @@ jobs:
 
         echo "🔍 Parsing Floating IPs..."
         
-        # Use jq to parse, but also add debug for failures
-        if ! jq -r 'to_entries[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt; then
-          echo "❌ jq Parsing Failed. Dumping raw JSON:"
-          cat floating_ips.json
-          exit 1
-        fi
-
+        # Use jq to transform into line-based format
+        jq -r 'to_entries | .[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt
+        
         # Validate output
         if [ ! -s floating_ips.txt ]; then
           echo "❌ No Floating IPs found."
