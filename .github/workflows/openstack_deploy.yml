@@ -64,11 +64,20 @@ jobs:
           exit 1
         fi
 
-        # Parse only the "value" object from the JSON
-        jq '.floating_ips.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
+        # Debugging: List all top-level keys to understand structure
+        echo "🔍 Top-level keys in Terraform output:"
+        jq 'keys' tf_output.json
 
-        echo "✅ Extracted Floating IPs:"
-        cat floating_ips.txt
+        # Check if the floating_ips key exists
+        if jq -e '.floating_ips' tf_output.json > /dev/null; then
+          echo "✅ floating_ips found, extracting IPs..."
+          jq '.floating_ips.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
+          echo "✅ Extracted Floating IPs:"
+          cat floating_ips.txt
+        else
+          echo "❌ 'floating_ips' not found in Terraform output."
+          exit 1
+        fi
 
     - name: Test SSH Connectivity with Retry
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
