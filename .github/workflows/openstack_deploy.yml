@@ -130,10 +130,26 @@ jobs:
         echo "🔌 Starting SSH Connectivity Test..."
         echo "📄 Reading floating IPs from floating_ips.txt"
         
-        # Read each line in floating_ips.txt
+        # Log file for debugging
+        echo "📝 Debugging floating_ips.txt content:"
+        cat floating_ips.txt
+        
+        # Ensure correct line endings
+        sed -i 's/\r$//' floating_ips.txt
+
+        # Read each line in floating_ips.txt and debug
         while IFS= read -r line || [ -n "$line" ]; do
+          echo "🔄 Processing line: '$line'"
+
+          # Split into name and IP
           vm_name=$(echo $line | awk -F':' '{print $1}')
           ip_address=$(echo $line | awk -F':' '{print $2}')
+
+          # If empty, skip it
+          if [ -z "$vm_name" ] || [ -z "$ip_address" ]; then
+            echo "⚠️ Skipping empty or malformed line: $line"
+            continue
+          fi
           
           echo "🌐 Checking SSH port availability for $vm_name ($ip_address)..."
           
@@ -171,8 +187,6 @@ jobs:
           # If still unsuccessful after 5 attempts
           if [ $connection_success -eq 0 ]; then
             echo "❌ Connection to $vm_name failed after 5 attempts."
-            # Optionally: If you want it to fail the build, uncomment below
-            # exit 1
           fi
 
           echo "🔄 Moving to the next VM..."
