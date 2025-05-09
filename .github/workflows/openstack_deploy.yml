@@ -56,14 +56,9 @@ jobs:
         # Get the floating IPs directly from Terraform
         terraform output -json floating_ips > floating_ips.json
 
-        echo "🔍 Validating Floating IPs JSON..."
-        if ! jq empty floating_ips.json > /dev/null 2>&1; then
-          echo "❌ Terraform output JSON is not valid. Dumping contents:"
-          cat floating_ips.json
-          exit 1
-        fi
-
         echo "🔍 Parsing Floating IPs..."
+        
+        # Instead of checking with `jq empty`, parse it directly
         jq -r 'to_entries[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt
 
         # Validate output
