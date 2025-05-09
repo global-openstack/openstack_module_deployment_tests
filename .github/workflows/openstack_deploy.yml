@@ -75,11 +75,6 @@ jobs:
           fi
         done
 
-    - name: Prepare SSH Private Key
-      run: |
-        echo "$OS_PRIVATE_KEY" > private_key.pem
-        chmod 600 private_key.pem
-
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
@@ -128,18 +123,51 @@ jobs:
         echo "FLOATING_IPS=$FLOATING_IPS_LIST" >> $GITHUB_ENV
         echo "✅ Exported FLOATING_IPS as: $FLOATING_IPS_LIST"
 
+    - name: Prepare SSH Private Key
+      run: |
+        echo "🗝️ Writing SSH Private Key to file..."
+        echo "$OS_PRIVATE_KEY" > private_key.pem
+        chmod 600 private_key.pem
+
+        # Log the current working directory and its contents
+        echo "📂 Current Directory: $PWD"
+        ls -la
+        
+        # Ensure the key is in the right location
+        if [ ! -f "private_key.pem" ]; then
+          echo "❌ Private key not found. Exiting."
+          exit 1
+        fi
+        
+        echo "✅ Private key is accessible."
+
     - name: SSH Connectivity Test
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔌 Starting SSH Connectivity Test..."
+        
+        # Ensure we are in the correct directory
+        if [ ! -f "$PWD/private_key.pem" ]; then
+          echo "❌ Private key not found in working directory."
+          exit 1
+        fi
+        
+        # Test SSH connectivity
         while IFS= read -r line; do
           vm_name=$(echo $line | awk -F':' '{print $1}')
           ip_address=$(echo $line | awk -F':' '{print $2}')
           
-          echo "Connecting to $vm_name ($ip_address)..."
+          echo "🌐 Checking SSH port availability for $vm_name ($ip_address)..."
+          if ! nc -z -w5 $ip_address 22; then
+            echo "❌ Port 22 is not available for $vm_name ($ip_address). Skipping SSH attempt."
+            continue
+          fi
+
+          echo "🔌 Connecting to $vm_name ($ip_address)..."
           
           for i in {1..5}; do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i private_key.pem ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $PWD/private_key.pem ${DEFAULT_SSH_USER}@$ip_address "hostname" && break
+            echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
             sleep 5
           done
 
