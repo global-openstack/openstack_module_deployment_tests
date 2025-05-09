@@ -139,8 +139,18 @@ jobs:
 
         # Use a file descriptor for the loop
         exec 3<floating_ips.txt
-        
+
+        # Initialize counters
+        total_vms=0
+        successful_vms=0
+        failed_vms=0
+
+        # Arrays to store success and failure
+        successful_list=()
+        failed_list=()
+
         while IFS= read -r line <&3; do
+          total_vms=$((total_vms + 1))
           echo "🔄 Processing line: '$line'"
 
           # Split into name and IP
@@ -166,21 +176,23 @@ jobs:
             fi
           done
           
-          # Verify if we actually tried all 5 attempts and still failed
           if [ "$i" -eq 5 ]; then
             echo "⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
             echo "🔄 Moving to the next VM..."
-            continue  # Skip to the next VM in case of repeated failure
+            failed_list+=("$vm_name ($ip_address)")
+            failed_vms=$((failed_vms + 1))
+            continue
           fi
 
           echo "🔌 Connecting to $vm_name ($ip_address)..."
           connection_success=0
           
-          # Retry loop for SSH connectivity with a timeout
           for i in {1..5}; do
             if timeout 15 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
               echo "✅ Connection to $vm_name successful!"
               connection_success=1
+              successful_list+=("$vm_name ($ip_address)")
+              successful_vms=$((successful_vms + 1))
               break
             else
               echo "⚠️ SSH attempt $i failed...retrying in 5 seconds."
@@ -188,11 +200,10 @@ jobs:
             fi
           done
 
-          # If still unsuccessful after 5 attempts
           if [ $connection_success -eq 0 ]; then
             echo "❌ Connection to $vm_name failed after 5 attempts."
-            echo "🔄 Moving to the next VM..."
-            continue  # Explicitly continue to avoid blocking
+            failed_list+=("$vm_name ($ip_address)")
+            failed_vms=$((failed_vms + 1))
           fi
 
           echo "🔄 Moving to the next VM..."
@@ -200,6 +211,22 @@ jobs:
         
         # Close the file descriptor
         exec 3<&-
+
+        # Summary Report
+        echo "📋 SSH Connectivity Test Summary:"
+        echo "Total VMs Processed: $total_vms"
+        echo "Successfully Connected: $successful_vms"
+        echo "Failed Connections: $failed_vms"
+
+        if [ $successful_vms -gt 0 ]; then
+          echo "✅ Successfully Connected VMs:"
+          printf '%s\n' "${successful_list[@]}"
+        fi
+
+        if [ $failed_vms -gt 0 ]; then
+          echo "❌ Failed to Connect VMs:"
+          printf '%s\n' "${failed_list[@]}"
+        fi
 
     - name: Terraform Destroy (Cleanup)
       if: always()
