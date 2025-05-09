@@ -96,8 +96,8 @@ jobs:
         for attempt in $(seq 1 $max_retries); do
           echo "🔄 Attempt $attempt of $max_retries..."
 
-          # Directly write the output, no awk manipulation
-          terraform output -json floating_ips > floating_ips.json
+          # Get the raw JSON and strip non-JSON lines using sed
+          terraform output -json floating_ips | sed 's/^[^{]*{//' | sed 's/}[^}]*$/}/' > floating_ips.json
 
           echo "🔍 Raw Terraform Output (sanitized):"
           cat floating_ips.json
