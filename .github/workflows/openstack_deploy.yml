@@ -29,6 +29,7 @@ jobs:
       OS_INTERFACE: ${{ secrets.OS_INTERFACE }}
       OS_IDENTITY_API_VERSION: ${{ secrets.OS_IDENTITY_API_VERSION }}
       OS_PRIVATE_KEY: ${{ secrets.OS_PRIVATE_KEY }}
+      DEFAULT_SSH_USER: rocky   # <-- Update this if needed
 
     steps:
     - name: Checkout code
@@ -58,7 +59,6 @@ jobs:
         echo "🔍 Fetching Terraform State..."
         terraform state pull > terraform_state.json
         
-        # Validate JSON structure
         echo "🔍 Validating Terraform State JSON..."
         if ! jq empty terraform_state.json > /dev/null 2>&1; then
           echo "❌ Terraform state JSON is not valid. Dumping contents:"
@@ -68,33 +68,62 @@ jobs:
         
         echo "🔍 Parsing Floating IP Associations..."
         
-        # Enhanced parsing to extract only floating IPs and their VM names
+        # Ensure there are floating IP associations
+        if ! jq -e '.resources[] | select(.type == "openstack_networking_floatingip_associate_v2")' terraform_state.json > /dev/null 2>&1; then
+          echo "❌ No floating IP associations found in state file."
+          exit 1
+        fi
+
+        # Extract only the relevant data from the state
         jq -r '
           .resources[] | 
           select(.type == "openstack_networking_floatingip_associate_v2") | 
           .instances[] | 
-          {
-            name: .index_key,
-            floating_ip: .attributes.floating_ip
-          }
-        ' terraform_state.json > fip_list.json
+          select(.attributes.floating_ip != null) |
+          "\(.index_key) \(.attributes.floating_ip)"
+        ' terraform_state.json > floating_ips.txt
         
-        echo "🔍 Discovered Floating IP Associations:"
-        cat fip_list.json
+        if [ ! -s floating_ips.txt ]; then
+          echo "❌ No floating IPs found."
+          exit 1
+        fi
         
-        # Initialize the IP list
-        > floating_ips.txt
-
-        # Loop through JSON and extract Floating IPs
-        jq -c '.floating_ip' fip_list.json | while read -r ip; do
-          if [ "$ip" != "null" ]; then
-            echo "$ip" | tr -d '"' >> floating_ips.txt
-          fi
-        done
-        
-        echo "✅ Floating IPs ready for SSH testing:"
+        echo "✅ Floating IPs found and ready for SSH testing:"
         cat floating_ips.txt
 
+    - name: Test SSH Connectivity
+      run: |
+        echo "$OS_PRIVATE_KEY" > private_key.pem
+        chmod 600 private_key.pem
+        
+        while IFS= read -r line; do
+          NAME=$(echo $line | awk '{print $1}')
+          IP=$(echo $line | awk '{print $2}')
+          echo "🔍 Testing SSH Connectivity to $NAME ($IP)"
+          
+          # Retry logic (12 attempts, 10 seconds apart)
+          MAX_ATTEMPTS=12
+          ATTEMPT=1
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Attempt $ATTEMPT of $MAX_ATTEMPTS: Trying to connect to $IP..."
+            nc -z -w5 $IP 22 && break
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 10
+          done
+
+          # Final SSH attempt if port 22 is reachable
+          if [ $ATTEMPT -le $MAX_ATTEMPTS ]; then
+            ssh -o StrictHostKeyChecking=no -i private_key.pem $DEFAULT_SSH_USER@$IP "echo 'SSH Connection Successful to $NAME'" \
+              && echo "$NAME ($IP) - ✅ SSH Success" \
+              || echo "$NAME ($IP) - ❌ SSH Failed"
+          else
+            echo "❌ Could not reach SSH on $NAME ($IP) after $MAX_ATTEMPTS attempts."
+          fi
+        done < floating_ips.txt
+        
+        # Clean up the private key after testing
+        rm -f private_key.pem
+    
     - name: Terraform Destroy (Cleanup)
       if: always()
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
