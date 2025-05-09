@@ -121,7 +121,7 @@ jobs:
         echo "🔍 Parsing Floating IPs..."
         
         # Use jq to transform into line-based format
-        jq -r 'to_entries | .[] | "\(.key) \(.value)"' floating_ips.json > floating_ips.txt
+        jq -r 'to_entries | .[] | "\(.key):\(.value)"' floating_ips.json > floating_ips.txt
         
         # Validate output
         if [ ! -s floating_ips.txt ]; then
@@ -132,16 +132,20 @@ jobs:
         echo "✅ Floating IPs found and ready for SSH testing:"
         cat floating_ips.txt
         
+        # Join the IPs into a single comma-separated line
+        FLOATING_IPS_LIST=$(paste -sd ',' floating_ips.txt)
+
         # Export to environment
-        echo "FLOATING_IPS=$(cat floating_ips.txt)" >> $GITHUB_ENV
+        echo "FLOATING_IPS=$FLOATING_IPS_LIST" >> $GITHUB_ENV
+        echo "✅ Exported FLOATING_IPS as: $FLOATING_IPS_LIST"
 
     - name: SSH Connectivity Test
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔌 Starting SSH Connectivity Test..."
         while IFS= read -r line; do
-          vm_name=$(echo $line | awk '{print $1}')
-          ip_address=$(echo $line | awk '{print $2}')
+          vm_name=$(echo $line | awk -F':' '{print $1}')
+          ip_address=$(echo $line | awk -F':' '{print $2}')
           
           echo "Attempting to SSH into $vm_name at $ip_address..."
           
