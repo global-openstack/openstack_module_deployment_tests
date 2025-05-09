@@ -43,13 +43,9 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform init
 
-    - name: Terraform Plan
-      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: terraform plan -out=tfplan
-
     - name: Terraform Apply
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: terraform apply tfplan
+      run: terraform apply -auto-approve
 
     - name: Discover Floating IPs from Terraform Output
       id: get_floating_ips
@@ -58,6 +54,13 @@ jobs:
         echo "🔍 Fetching Terraform Outputs..."
         terraform output -json > terraform_outputs.json
         
+        echo "🔍 Validating Terraform Outputs JSON..."
+        if ! jq empty terraform_outputs.json > /dev/null 2>&1; then
+          echo "❌ Terraform output JSON is not valid. Dumping contents:"
+          cat terraform_outputs.json
+          exit 1
+        fi
+
         echo "🔍 Parsing Floating IPs..."
         jq -r '
           .floating_ips.value | to_entries[] | "\(.key) \(.value)"
