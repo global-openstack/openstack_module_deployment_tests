@@ -51,32 +51,56 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: terraform apply tfplan
 
-    - name: Extract Floating IPs
-      id: extract_ips
+    - name: Extract Terraform Outputs and Debug
+      id: extract_outputs
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         terraform output -json > tf_output.json
         
-        # Check if tf_output.json is valid JSON
-        if ! jq empty tf_output.json > /dev/null 2>&1; then
-          echo "❌ Terraform output is not valid JSON. Dumping contents:"
-          cat tf_output.json
-          exit 1
-        fi
+        # ====> Step 1: Dump Full JSON <====
+        echo "🔍 Full JSON output from Terraform:"
+        cat tf_output.json | tee tf_output.log
 
-        # Debugging: List all top-level keys to understand structure
+        # ====> Step 2: List All Keys <====
         echo "🔍 Top-level keys in Terraform output:"
-        jq 'keys' tf_output.json
-
-        # Check if the floating_ips key exists
-        if jq -e '.floating_ips' tf_output.json > /dev/null; then
+        jq 'keys' tf_output.json | tee keys.log
+        
+        # ====> Step 3: Parse Each Key Separately <====
+        
+        # 1. Floating IPs
+        if jq -e '.floating_ips.value' tf_output.json > /dev/null; then
           echo "✅ floating_ips found, extracting IPs..."
           jq '.floating_ips.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > floating_ips.txt
           echo "✅ Extracted Floating IPs:"
           cat floating_ips.txt
         else
-          echo "❌ 'floating_ips' not found in Terraform output."
-          exit 1
+          echo "❌ 'floating_ips.value' not found or empty."
+        fi
+        
+        # 2. Additional NICs Ports
+        if jq -e '.additional_nics_ports.value' tf_output.json > /dev/null; then
+          echo "✅ additional_nics_ports found."
+          jq '.additional_nics_ports.value' tf_output.json > additional_nics_ports.log
+        else
+          echo "❌ 'additional_nics_ports.value' not found or empty."
+        fi
+        
+        # 3. Additional Volumes
+        if jq -e '.additional_volumes.value' tf_output.json > /dev/null; then
+          echo "✅ additional_volumes found."
+          jq '.additional_volumes.value' tf_output.json > additional_volumes.log
+        else
+          echo "❌ 'additional_volumes.value' not found or empty."
+        fi
+        
+        # 4. VM IDs
+        if jq -e '.vm_ids.value' tf_output.json > /dev/null; then
+          echo "✅ vm_ids found."
+          jq '.vm_ids.value | to_entries[] | "\(.key) \(.value)"' tf_output.json > vm_ids.txt
+          echo "✅ Extracted VM IDs:"
+          cat vm_ids.txt
+        else
+          echo "❌ 'vm_ids.value' not found or empty."
         fi
 
     - name: Test SSH Connectivity with Retry
