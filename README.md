@@ -27,7 +27,7 @@ This repository supports the following scenarios:
 .
 ├── .github/
 │ └── workflows/
-│ └── openstack_deploy.yml # GitHub Actions workflow file
+│ └── openstack_deploy.yml
 └── openstack_compute_instance_v2/
 ├── dfw3-rocky9-local-disk-deployment/
 │ ├── main.tf
