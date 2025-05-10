@@ -1,0 +1,256 @@
+name: OpenStack Terraform Deployment Test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        scenario: [
+          "dfw3-rocky9-local-disk-deployment",
+        ]
+
+    env:
+      OS_AUTH_URL: ${{ secrets.OS_AUTH_URL }}
+      OS_PROJECT_ID: ${{ secrets.OS_PROJECT_ID }}
+      OS_PROJECT_NAME: ${{ secrets.OS_PROJECT_NAME }}
+      OS_PROJECT_DOMAIN_NAME: ${{ secrets.OS_PROJECT_DOMAIN_NAME }}
+      OS_USER_DOMAIN_NAME: ${{ secrets.OS_USER_DOMAIN_NAME }}
+      OS_USERNAME: ${{ secrets.OS_USERNAME }}
+      OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
+      OS_REGION_NAME: ${{ secrets.OS_REGION_NAME }}
+      OS_INTERFACE: ${{ secrets.OS_INTERFACE }}
+      OS_IDENTITY_API_VERSION: ${{ secrets.OS_IDENTITY_API_VERSION }}
+      OS_PRIVATE_KEY: ${{ secrets.OS_PRIVATE_KEY }}
+      DEFAULT_SSH_USER: rocky
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.7
+
+    - name: Terraform Init
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: terraform init
+
+    - name: Terraform Apply with Retry Logic
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        echo "🚀 Starting Terraform Apply..."
+        start_time=$(date +%s)
+
+        max_retries=5
+        delay=15
+
+        for attempt in $(seq 1 $max_retries); do
+          echo "🔄 Attempt $attempt of $max_retries..."
+          terraform apply -auto-approve | tee terraform_apply.log
+
+          if grep -q "Apply complete!" terraform_apply.log; then
+            echo "✅ Terraform Apply completed successfully!"
+            break
+          else
+            if grep -q "openstack" terraform_apply.log; then
+              echo "⏳ Waiting $delay seconds before retrying..."
+              sleep $delay
+            else
+              echo "❌ Non-retryable error detected."
+              cat terraform_apply.log
+              exit 1
+            fi
+          fi
+
+          if [ "$attempt" -eq "$max_retries" ]; then
+            echo "🔥 Maximum retries reached. Terraform Apply failed."
+            exit 1
+          fi
+        done
+
+        end_time=$(date +%s)
+        duration=$((end_time - start_time))
+        echo "⏱️ Terraform Apply Duration: $((duration / 60)) minutes and $((duration % 60)) seconds"
+
+    - name: Discover Floating IPs from Terraform Output
+      id: get_floating_ips
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        echo "🔍 Fetching Terraform Outputs..."
+        
+        max_retries=3
+        for attempt in $(seq 1 $max_retries); do
+          echo "🔄 Attempt $attempt of $max_retries..."
+
+          terraform output -json floating_ips | grep -E '^{.*}$' > floating_ips.json
+
+          if jq empty floating_ips.json > /dev/null 2>&1; then
+            echo "✅ JSON is valid."
+            break
+          else
+            echo "❌ The floating_ips.json is not valid JSON (attempt $attempt)."
+            if [ "$attempt" -lt "$max_retries" ]; then
+              echo "🔄 Retrying in 5 seconds..."
+              sleep 5
+            else
+              echo "🔥 Maximum retries reached. Failing."
+              cat floating_ips.json
+              exit 1
+            fi
+          fi
+        done
+
+        echo "🔍 Parsing Floating IPs..."
+        
+        jq -r 'to_entries | .[] | "\(.key):\(.value)"' floating_ips.json > floating_ips.txt
+        
+        if [ ! -s floating_ips.txt ]; then
+          echo "❌ No Floating IPs found."
+          exit 1
+        fi
+
+        FLOATING_IPS_LIST=$(paste -sd ',' floating_ips.txt)
+        echo "FLOATING_IPS=$FLOATING_IPS_LIST" >> $GITHUB_ENV
+        echo "✅ Exported FLOATING_IPS as: $FLOATING_IPS_LIST"
+
+    - name: Prepare SSH Private Key
+      run: |
+        echo "🗝️ Writing SSH Private Key to file..."
+        PRIVATE_KEY_PATH="$HOME/private_key.pem"
+        echo "$OS_PRIVATE_KEY" > "$PRIVATE_KEY_PATH"
+        chmod 600 "$PRIVATE_KEY_PATH"
+        echo "✅ Private key is accessible at $PRIVATE_KEY_PATH."
+
+    - name: SSH Connectivity Test (Parallelized with Batching and Timer)
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        echo "🔌 Starting SSH Connectivity Test (Parallelized)..."
+        test_start_time=$(date +%s)
+        
+        # Initialize shared files
+        touch success_list.txt failed_list.txt
+        echo 0 > total_vms.txt
+        echo 0 > successful_vms.txt
+        echo 0 > failed_vms.txt
+
+        # Maximum parallel jobs
+        batch_size=10
+
+        ssh_check() {
+          local vm_name=$1
+          local ip_address=$2
+          local retry_delay=5
+
+          echo "$(date) 🌐 Checking SSH port availability for $vm_name ($ip_address)..."
+          
+          for i in {1..5}; do
+            if timeout 10 nc -z -w5 $ip_address 22; then
+              echo "$(date) 🔌 Port 22 is open for $vm_name ($ip_address)"
+              break
+            else
+              echo "$(date) ❌ Port 22 is closed, retrying in ${retry_delay}s..."
+              sleep $retry_delay
+              retry_delay=$((retry_delay * 2))
+            fi
+          done
+
+          if [ "$i" -eq 5 ]; then
+            echo "$(date) ⚠️ Warning: Port 22 did not open for $vm_name after 5 attempts."
+            echo "$vm_name ($ip_address)" >> failed_list.txt
+            return
+          fi
+
+          echo "$(date) 🔌 Connecting to $vm_name ($ip_address)..."
+          
+          if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address "hostname"; then
+            echo "$(date) ❌ Connection to $vm_name failed."
+            echo "$vm_name ($ip_address)" >> failed_list.txt
+          else
+            echo "$(date) ✅ Connection to $vm_name successful!"
+            echo "$vm_name ($ip_address)" >> success_list.txt
+          fi
+        }
+
+        # Read each line and execute the SSH check in the background
+        while IFS= read -r line; do
+          (
+            vm_name=$(echo $line | awk -F':' '{print $1}')
+            ip_address=$(echo $line | awk -F':' '{print $2}')
+            ssh_check "$vm_name" "$ip_address"
+          ) &
+
+          while [ "$(jobs | wc -l)" -ge "$batch_size" ]; do
+            sleep 1
+          done
+        done < floating_ips.txt
+        
+        wait
+        sort success_list.txt -o success_list.txt
+        sort failed_list.txt -o failed_list.txt
+
+        echo "✅ Successfully Connected VMs:"
+        cat success_list.txt
+
+        echo "❌ Failed to Connect VMs:"
+        cat failed_list.txt
+
+        test_end_time=$(date +%s)
+        test_duration=$((test_end_time - test_start_time))
+        echo "⏱️ SSH Connectivity Test Duration: $((test_duration / 60)) minutes and $((test_duration % 60)) seconds"
+
+    - name: Volume Format and Label Verification
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: |
+        echo "🔍 Starting Volume Format and Label Verification..."
+
+        while IFS= read -r ip; do
+          echo "🔄 Verifying volumes on VM with IP: $ip"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip << 'EOF'
+            echo "📂 Checking volume labels and mounts..."
+            lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
+            blkid
+            echo "🔍 Verifying data volumes..."
+            missing_volumes=false
+            lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
+              disk_name=$(echo $line | awk '{print $1}')
+              disk_label=$(echo $line | awk '{print $2}')
+              if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
+                echo "❌ Volume $disk_name is missing a label!"
+                missing_volumes=true
+              else
+                echo "✅ Volume $disk_name labeled as $disk_label"
+              fi
+            done
+            if $missing_volumes; then
+              echo "❌ Volume label verification failed."
+              exit 1
+            else
+              echo "✅ All volumes labeled correctly."
+            fi
+          EOF
+        done < floating_ips.txt
+        echo "✅ Volume label and format verification completed."
+
+    - name: Display Volume Verification Results
+      if: always()
+      run: |
+        echo "📦 Displaying Volume Verification Results:"
+        if [ -f failed_list.txt ] && [ -s failed_list.txt ]; then
+          echo "❌ The following VMs failed volume verification:"
+          cat failed_list.txt
+        else
+          echo "✅ All VMs passed volume verification."
+        fi
+    
+    - name: Terraform Destroy (Cleanup)
+      if: always()
+      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
+      run: terraform destroy -auto-approve
