@@ -213,15 +213,20 @@ jobs:
 
         while IFS= read -r ip; do
           echo "🔄 Verifying volumes on VM with IP: $ip"
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip << 'EOF'
+          
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip bash << 'EOF'
             echo "📂 Checking volume labels and mounts..."
             lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
             blkid
+
             echo "🔍 Verifying data volumes..."
             missing_volumes=false
+
+            # Loop through disks and check labels
             lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
               disk_name=$(echo $line | awk '{print $1}')
               disk_label=$(echo $line | awk '{print $2}')
+              
               if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
                 echo "❌ Volume $disk_name is missing a label!"
                 missing_volumes=true
@@ -229,15 +234,18 @@ jobs:
                 echo "✅ Volume $disk_name labeled as $disk_label"
               fi
             done
-            if $missing_volumes; then
+
+            if [ "$missing_volumes" == "true" ]; then
               echo "❌ Volume label verification failed."
               exit 1
             else
               echo "✅ All volumes labeled correctly."
             fi
-          EOF
+        EOF
         done < floating_ips.txt
+        
         echo "✅ Volume label and format verification completed."
+
 
     - name: Display Volume Verification Results
       if: always()
