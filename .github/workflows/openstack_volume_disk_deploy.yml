@@ -259,8 +259,4 @@ jobs:
         else
           echo "✅ All VMs passed volume verification."
         fi
-    
-    - name: Terraform Destroy (Cleanup)
-      if: always()
-      working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
-      run: terraform destroy -auto-approve
+
