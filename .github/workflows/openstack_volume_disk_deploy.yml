@@ -226,36 +226,38 @@ jobs:
           while [ $attempt -le $max_retries ]; do
             echo "🔄 Attempt $attempt of $max_retries to verify volumes..."
 
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address bash << 'EOF'
-              echo "📂 Checking volume labels and mounts..."
-              lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
-              blkid
+            # SSH to the VM and check the labels
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address << 'EOF'
+          echo "📂 Checking volume labels and mounts..."
+          lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
+          blkid
 
-              echo "🔍 Verifying data volumes..."
-              missing_volumes=false
+          echo "🔍 Verifying data volumes..."
+          missing_volumes=false
 
-              # Loop through disks and check labels
-              lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
-                disk_name=$(echo $line | awk '{print $1}')
-                disk_label=$(echo $line | awk '{print $2}')
-                
-                if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
-                  echo "❌ Volume $disk_name is missing a label!"
-                  missing_volumes=true
-                else
-                  echo "✅ Volume $disk_name labeled as $disk_label"
-                fi
-              done
+          # Loop through disks and check labels
+          lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
+            disk_name=$(echo $line | awk '{print $1}')
+            disk_label=$(echo $line | awk '{print $2}')
+            
+            if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
+              echo "❌ Volume $disk_name is missing a label!"
+              missing_volumes=true
+            else
+              echo "✅ Volume $disk_name labeled as $disk_label"
+            fi
+          done
 
-              if [ "$missing_volumes" == "false" ]; then
-                echo "✅ All volumes labeled correctly."
-                exit 0
-              else
-                echo "❌ Volume labels not ready yet."
-                exit 1
-              fi
+          if [ "$missing_volumes" == "false" ]; then
+            echo "✅ All volumes labeled correctly."
+            exit 0
+          else
+            echo "❌ Volume labels not ready yet."
+            exit 1
+          fi
           EOF
 
+          # Check the exit status of the SSH command
             if [ $? -eq 0 ]; then
               echo "✅ Volume verification successful on attempt $attempt."
               success=true
@@ -274,7 +276,6 @@ jobs:
         done < floating_ips.txt
         
         echo "✅ Volume label and format verification completed."
-
 
     - name: Display Volume Verification Results
       if: always()
