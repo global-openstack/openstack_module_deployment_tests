@@ -210,6 +210,9 @@ jobs:
       working-directory: openstack_compute_instance_v2/${{ matrix.scenario }}
       run: |
         echo "🔍 Starting Volume Format and Label Verification..."
+        
+        max_retries=10
+        delay=15
 
         while IFS= read -r line; do
           vm_name=$(echo $line | awk -F':' '{print $1}')
@@ -217,37 +220,61 @@ jobs:
           
           echo "🔄 Verifying volumes on VM with IP: $ip_address"
 
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address bash << 'EOF'
-            echo "📂 Checking volume labels and mounts..."
-            lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
-            blkid
+          attempt=1
+          success=false
 
-            echo "🔍 Verifying data volumes..."
-            missing_volumes=false
+          while [ $attempt -le $max_retries ]; do
+            echo "🔄 Attempt $attempt of $max_retries to verify volumes..."
 
-            # Loop through disks and check labels
-            lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
-              disk_name=$(echo $line | awk '{print $1}')
-              disk_label=$(echo $line | awk '{print $2}')
-              
-              if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
-                echo "❌ Volume $disk_name is missing a label!"
-                missing_volumes=true
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$HOME/private_key.pem" ${DEFAULT_SSH_USER}@$ip_address bash << 'EOF'
+              echo "📂 Checking volume labels and mounts..."
+              lsblk -o NAME,SIZE,MOUNTPOINT,LABEL
+              blkid
+
+              echo "🔍 Verifying data volumes..."
+              missing_volumes=false
+
+              # Loop through disks and check labels
+              lsblk -o NAME,LABEL | grep -E '^vd[b-z]' | while read -r line; do
+                disk_name=$(echo $line | awk '{print $1}')
+                disk_label=$(echo $line | awk '{print $2}')
+                
+                if [[ -z "$disk_label" || "$disk_label" == " " ]]; then
+                  echo "❌ Volume $disk_name is missing a label!"
+                  missing_volumes=true
+                else
+                  echo "✅ Volume $disk_name labeled as $disk_label"
+                fi
+              done
+
+              if [ "$missing_volumes" == "false" ]; then
+                echo "✅ All volumes labeled correctly."
+                exit 0
               else
-                echo "✅ Volume $disk_name labeled as $disk_label"
+                echo "❌ Volume labels not ready yet."
+                exit 1
               fi
-            done
+          EOF
 
-            if [ "$missing_volumes" == "true" ]; then
-              echo "❌ Volume label verification failed."
-              exit 1
+            if [ $? -eq 0 ]; then
+              echo "✅ Volume verification successful on attempt $attempt."
+              success=true
+              break
             else
-              echo "✅ All volumes labeled correctly."
+              echo "⏳ Waiting for $delay seconds before next attempt..."
+              sleep $delay
+              attempt=$((attempt + 1))
             fi
-        EOF
+          done
+
+          if [ "$success" == "false" ]; then
+            echo "🔥 Maximum retries reached. Volume verification failed on $ip_address."
+            exit 1
+          fi
         done < floating_ips.txt
         
         echo "✅ Volume label and format verification completed."
+
 
     - name: Display Volume Verification Results
       if: always()
